@@ -1,61 +1,113 @@
 <?php
-class BtcUsdHistory {
+/**
+ *
+ * The MIT License (MIT)
+ * 
+ * Copyright (c) 2013 Stephen Calnan https://github.com/asciimo
+ * 
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ * 
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ * 
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ *
+ *                
+ * About this script
+ * -----------------
+ *
+ * This script fetches and caches Mt. Gox trade data for arbitrary dates. It uses 
+ * the API documented [here](https://en.bitcoin.it/wiki/MtGox/API/HTTP/v1#Multi_currency_trades).  
+ * There is a newer version of the API which is not officially documented, but there is a 
+ * lot of unofficial information about it [here](https://bitbucket.org/nitrous/mtgox-api/overview#markdown-header-moneytradesfetch)
+ *
+ * There's also an interesting possibility of querying a Google BigQuery database for 
+ * this information.  More on that [here](https://bitcointalk.org/index.php?topic=218980.0)
+ * 
+ * ### Usage
+ * 
+ * date_default_timezone_set('America/Los_Angeles');
+ * $B = new BtcPriceHistory();
+ * echo $B->getPriceAt('2013-08-18');
+ *
+ * ### About the cache
+ *
+ * This script maintains an API cache called `apicache.dat`. The class will always
+ * check for a result in this file first.  If it does not find a result it will
+ * make a new API request. It will reduce the trades for the requested date into
+ * a daily average and update the cache file.  This can take a little while, so
+ * keep in mind that cache misses are expensive.  
+ *
+ */
+class BtcPriceHistory {
 
-	protected $apiCache = 'bitcoincharts.dat';
-	protected $apiUrl= 'http://api.bitcoincharts.com/v1/trades.csv?symbol=btcexYAD&start=';
+	protected $apiCache = 'apicache.dat';
+	protected $apiUrl = 'https://data.mtgox.com/api/1/BTCUSD/trades?since='; //1363330800000000 16 digits!
 	protected $indexFormat = 'Ymd';
 
 	/**
 	 * @param string Date in almost any format recognized by DateTime 
 	 *   (@see http://us3.php.net/manual/en/class.datetime.php)
-	 * @return float Average USD value of Bitcoin on that date
+	 * @return float Average price of Bitcoin on that date
 	 */
 	public function getPriceAt($date) {
-		echo __FUNCTION__ . "\n"; //debug
-		// Check date validity
 		$D = new DateTime($date);
 		return $this->fetch($D);
 	}
 
 	/**
 	 * @param DateTime Date object representing day to fetch
-	 * @return float Average USD value for BTC on the given date
+	 * @return float Average price for BTC on the given date
 	 */
 	protected function fetch(DateTime $D) {
-		echo __FUNCTION__ . "\n"; //debug
 
-		$timestamp = $D->format('U'); // Unix timestamp for API
-		$index = $D->format('Ymd'); // Truncated index for API cache
+		$timestamp = $D->format('U') . '000000'; // Unix timestamp for API
+		$index = $D->format('Ymd'); // Truncated index for local API cache
 
-		$usd = $this->fetchFromCache($index);
-		if($usd === false) {
-			echo 'NOT FOUND IN CACHE' . "\n"; //debug
+		$price = $this->fetchFromCache($index);
+		if($price === false) {
 			// Not found. Update the API cache
-			echo 'Going to fetch ' . $this->apiUrl . $timestamp; //debug
 			$handle = fopen($this->apiUrl . $timestamp, 'r');
-			print_r($handle);exit(); //debug
+			if(empty($handle)) {
+				exit('Unable to fetch data from ' . $this->apiUrl);
+			}
 			$data = stream_get_contents($handle);
-			print_r($data);exit();//debug
 			fclose($handle);
 			if (!empty($data)) {
 				$this->updateCache($data);
-				$usd = $this->fetchFromCache($index);
+				$price = $this->fetchFromCache($index);
 			} 
 		}
-		return sprintf('%01.2f', $usd);
+		return sprintf('%01.2f', $price);
 	}
 
 	/**
-	 * 
 	 * @param string $index Truncated Unix timestamp
 	 * @return float Cached BTC value at given index
+	 * @throws generic exception on file failure
 	 */
 	protected function fetchFromCache($index) {
-		echo __FUNCTION__ . "\n"; //debug
-		$f = fopen($this->apiCache, 'r') or die ('Could not open ' . $this->apiCache);
+		if(!file_exists($this->apiCache) || !is_readable($this->apiCache)) {
+			return false;
+		}
+		$f = fopen($this->apiCache, 'r');
+		if(empty($f)) {
+			throw new Exception ('Unable to read ' . $this->apiCache);
+		}
+
 		while (($record = fgets($f)) !== false) {
 			$data = explode(',', $record);
-			print_r($data); //debug
 			if($data[0] == $index) {
 				return $data[1];
 			}
@@ -64,40 +116,43 @@ class BtcUsdHistory {
 	}
 
 	/**
-	 * @param array CSV data from API
-	 * @return boolean True if reduction was successful, false if not
+	 * @param string Big chunk of JSON data from API
+	 * @return boolean True if update was successful, false if not
 	 */
 	protected function updateCache($data) {
-		echo __FUNCTION__ . "\n"; //debug
-		$days = array();
-		foreach($data as $record) {
-			list($timestamp, $usd, $quantity) = split(',', $record);
-			$D = new DateTime($timestamp);
-			$days[$D->format($this->indexFormat)] = array(
-				'dollars' => $usd, 
-				'coins' => $quantity
-			);
+		$data = json_decode($data, true);
+		if($data['result'] !== "success") {
+			throw new Exception ('API request failed.');
 		}
-		print_r($days, true); // debug
 
-		$f = fopen($this->ApiCache, 'a');
-
-		// The average is the total USD spent divided by the total coins traded
-		foreach($days as $day => $trades) {
-			$dollars = 0;
-			$coins = 0;
-			foreach($trades as $trade) {
-				$dollars += $trade['dollars'];
-				$quantity += $trade['coins'];
+		$days = array();
+		foreach($data['return'] as $trade) {
+			if($trade['primary'] == 'Y') { // 'Y' indicates a buy
+				$D = new DateTime();
+				$D->setTimestamp($trade['date']);
+				$days[$D->format($this->indexFormat)][] = $trade['price'];
 			}
-			fwrite($f, $day . ',' . $dollars / $quantity);
+		}
+
+		$f = fopen($this->apiCache, 'a+');
+
+		foreach($days as $day => $trades) {
+			$average = array_sum($trades) / count($trades);
+			fwrite($f, $day . ',' . $average . "\n");
 		}
 		fclose($f);
+
+		// Re-sort the cache records and eliminate duplicates. 
+		$allDays = file($this->apiCache);
+		$allDays = array_unique($allDays);
+		ksort($allDays);
+		file_put_contents($this->apiCache, $allDays);
+
+		return true;
 	}
 }
 
 date_default_timezone_set('America/Los_Angeles');
-$B = new BtcUsdHistory();
-echo $B->getPriceAt('2013-03-18');
-
+$B = new BtcPriceHistory();
+echo $B->getPriceAt('2013-03-17') . "\n";
 ?>
