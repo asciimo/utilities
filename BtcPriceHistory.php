@@ -37,9 +37,9 @@
  * 
  * ### Usage
  * 
- * date_default_timezone_set('America/Los_Angeles');
- * $B = new BtcPriceHistory();
- * echo $B->getPriceAt('2013-08-18');
+ *     date_default_timezone_set('America/Los_Angeles');
+ *     $B = new BtcPriceHistory();
+ *     echo $B->getPriceAt('2013-08-18');
  *
  * ### About the cache
  *
@@ -151,8 +151,4 @@ class BtcPriceHistory {
 		return true;
 	}
 }
-
-date_default_timezone_set('America/Los_Angeles');
-$B = new BtcPriceHistory();
-echo $B->getPriceAt('2013-03-17') . "\n";
 ?>
