@@ -1,4 +1,11 @@
 #! /usr/bin/env python
+""" Replaces image paths in a target directory, optionally recursively.
+
+@todo make this more general, with "images" a processor extension that
+implements the `process()` and `replace()` functions, with further 
+extensions for specific regex patterns e.g. images on foosite.com getting
+replaced to barsite.com.
+"""
 
 import sys
 import os
@@ -77,7 +84,7 @@ def get_files(directory):
             path = os.path.join(root, filename)
             if verbose:
                 print "Processing: %s" % path
-            replacements = replace(path)
+            replacements = process(path)
             total_replacements += replacements
             if verbose:
                 print "Replaced %d instances in %s (%s total)" % (replacements, path, total_replacements)
@@ -88,28 +95,54 @@ def get_files(directory):
         if recursive == False:
             break;
 
-def replace(path):
+def replace(matchobj):
+    """ The incoming match group will be:
+    0 the entire match string
+    1 the first quotation mark, ' or "
+    2 the entire image path
+    3 the image extension; jpg, jpeg, gif, or png
+    """
+    # Ignore any paths that seem to be correct
+    correct_search = re.compile(r'//\{\$static_host\}')
+    if correct_search.match(matchobj.group(2)):
+        return matchobj.group(0)
+
+    # Replace the old attempt at dynamic static URLs
+    variable_search = re.compile(r'^\{\$base_url\}/(.+?)$')
+    variable_matchobj = variable_search.match(matchobj.group(2))
+    if variable_matchobj != None: 
+        return matchobj.group(1) + '//{$static_host}/' + variable_matchobj.group(1) + matchobj.group(1)
+
+    # Replace image paths that contain the domain name
+    domain_search = re.compile(r'^http://www\.happycow\.net/(.+?)$', flags=re.IGNORECASE)
+    domain_matchobj = domain_search.match(matchobj.group(2))
+    if domain_matchobj != None: 
+        return matchobj.group(1) + '//{$static_host}/' + domain_matchobj.group(1) + matchobj.group(1)
+
+    # Replace root-relative image paths
+    root_search = re.compile(r'^/(.+?)$')
+    root_matchobj = root_search.match(matchobj.group(2))
+    if root_matchobj != None:
+        return matchobj.group(1) + '//{$static_host}/' + root_matchobj.group(1) + matchobj.group(1)
+
+    return matchobj.group(0)
+
+
+def process(path):
     match_count = 0
 
     with open(path, 'r') as f:
         content = f.read()
 
-    # First, see if there are any easily replaceable image paths
-    any_image_search = re.compile(r'([\'"])(.*?\.(jpg|jpeg|gif|png))\1', flags=re.IGNORECASE)
-    image_search_results = any_image_search.findall(content)
+    # First, see if there are any candidate image paths
+    image_search = re.compile(r'([\'"])([^\'"]+\.(jpg|jpeg|gif|png))\1', flags=re.IGNORECASE)
+    image_search_results = image_search.findall(content)
 
     if len(image_search_results) == 0:
         return 0
 
     # Replace image paths that contain the domain name
-    domain_search = re.compile(r'([\'"])http://www\.happycow\.net/(.*?\.(jpg|jpeg|gif|png))\1', flags=re.IGNORECASE)
-    results = domain_search.subn(r'\1//{$static_host}/\2\1', content)
-    content = results[0]
-    match_count += results[1]
-
-    # Replace root-relative image paths
-    root_relative_search = re.compile(r'([\'"])/(?!/{$static_host})(.*?\.(jpg|jpeg|gif|png))\1', flags=re.IGNORECASE)
-    results = root_relative_search.subn(r'\1//{$static_host}/\2\1', content)
+    results = image_search.subn(replace, content)
     content = results[0]
     match_count += results[1]
 
